@@ -3,6 +3,17 @@
 # Introduction
 I made this to fix the **main issue** of Minecraft's Script API: **you can't save ItemStacks in a dynamic property**, and if you try to stringify their properties you still lose some of them that are unreachable with scripts. **This database fixes this problem using structures that save perfect item clones, making it easy, reliable and fast.**
 
+# Projects that alredy use QIDB
+[Simple Kits](https://www.curseforge.com/minecraft-bedrock/addons/simple-kits) - By **Legend077**
+
+[GearKits](https://www.curseforge.com/minecraft-bedrock/addons/gearkits) - By **lildanlid**
+
+[Infinite Ender Chest](https://www.curseforge.com/minecraft-bedrock/addons/infinite-ender-chest) - By **iskesa**
+
+[Crossblades+](https://www.curseforge.com/minecraft-bedrock/addons/crossbladesplus) - By **areedelahi**
+
+[DonutSMP Shop & Sell System](https://www.curseforge.com/minecraft-bedrock/addons/shop-sell-donutsmp-shop-sell-system) - By **SomMondal123**
+
 # How does it work?
 
 - This database uses **structures** to save items. It uses an **entity with 256 slots** instead of dropped items, to minimize the lag of the loaded entities.
