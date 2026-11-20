@@ -72,9 +72,12 @@ if (db.has(player.id)) {
 # Performance
 
 Measured in game.
-<img width="2400" height="2780" alt="3b6f6b05-36e2-40da-8673-8a62f1f791a5" src="https://github.com/user-attachments/assets/0fdcf359-4061-46df-b571-f8e580077a13" />
-<img width="2400" height="2436" alt="f30e1ea1-9b3a-4f2b-b022-d516bc4030b6" src="https://github.com/user-attachments/assets/d355fbbf-11ae-4673-bd69-6e320cd7f087" />
-<img width="2400" height="1536" alt="61fafa29-b33e-4244-8813-fcf8f6a28773" src="https://github.com/user-attachments/assets/74f16e72-d642-4561-a5e6-e40bf7a552ab" />
+<img width="1920" height="3272" alt="image" src="https://github.com/user-attachments/assets/0e063051-96c2-4dd1-bc78-864341a6b6c0" />
+
+<img width="1920" height="2802" alt="image" src="https://github.com/user-attachments/assets/06ec92d4-f5bc-46d0-8577-3901c8b1d4c7" />
+
+<img width="1920" height="2760" alt="image" src="https://github.com/user-attachments/assets/488d28fa-6e62-4ab2-bc5d-d86350083d27" />
+
 
 - **Store items together**: 255 ItemStacks in one key are saved in 3 ms; as 255 separate keys they take 302 ms (101× slower).
 - **Keep `saveTime` at 10** (default): higher values barely save faster but make the ticks heavier.
