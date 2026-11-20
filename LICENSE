@@ -1,18 +1,56 @@
-QIDB License – © 2026 Carchi777
+# QIDB License
 
-1) QIDB may be included in any project (Marketplace, CurseForge, MCPEDL, GitHub, etc.).
-Credits must be clearly visible in the project's README, description page, or in-game credits screen, and must include the author's name (Carchi777) and a link to the original GitHub page.
+Copyright © 2026 Minecart7. All rights reserved.
+QIDB (Quick Item Database): https://github.com/MineCart7/QUICK-ITEM-DATABASE
 
-2) You are not allowed to sell QIDB as a standalone product.  
-Selling or redistributing QIDB directly to private individuals is strictly prohibited.
-This restriction does not affect Marketplace usage (see point 3).
+## 1. Scope
 
-3) You are allowed to use QIDB in a Marketplace product, as long as:
-- QIDB is included as part of an addon,
-- Proper credits are given (as stated in point 1),
-- QIDB is not accessible as a standalone asset.
+This License applies to QIDB V4 and every later version (the "Software"), starting from the day QIDB V4 was first published.
+Earlier versions keep the license they were published with.
+Using the Software in any way means accepting this License.
 
-4) You are allowed to modify QIDB for use within your own project or forking this repo to share it, but you may not redistribute a modified version as a standalone product claiming it as your own original work.
+## 2. Definitions
 
-5) Liability Disclaimer  
-I take no responsibility for how you use this database or for any consequences arising from its use.
+- **Author**: MineCart7 (formerly Carchi777), owner of the Software.
+- **Project**: any add-on, pack, world or other content that includes the Software.
+
+## 3. Minecraft Marketplace
+
+A Project sold or published on the Minecraft Marketplace needs a written agreement with the Author **before its release**.
+
+The agreement may include a small royalty on the Project's revenue.
+
+## 4. Outside the Marketplace
+
+Projects published elsewhere (CurseForge and other platforms) may use the Software for free, as long as they credit the Author:
+
+- on CurseForge, add the profile **MineCart7** as a member of the Project;
+- where this is not possible, or if another form of credit is needed, contact the Author and agree on one.
+
+## 5. Restrictions
+
+The Software may be included in a Project only as allowed by sections 3, 4 and 6. It is not allowed to:
+
+1. sell the Software, on its own or as the main content of a product;
+2. redistribute the Software on its own, or copy its code into other software;
+3. use the Software, in whole or in part, to train, fine-tune or prompt AI models or tools in order to create clones or similar libraries;
+4. publish the Software anywhere without this License file, or a link to it, next to it.
+
+## 6. Modifications and forks
+
+- The Software may be modified only through a fork.
+- A fork, with every modification in it, stays under this License, and the Software remains the property of the Author.
+- Anyone who uses a fork must, besides crediting the Author, also credit the author of the fork when the fork's author asks for it.
+
+## 7. No warranty
+
+The Software is provided "as is", without warranty of any kind. The Author is not liable for any damage or data loss caused by its use.
+
+## 8. Termination
+
+Breaking this License ends the right to use the Software immediately. The right can be restored only by agreement with the Author.
+
+## Contact
+
+- GitHub: https://github.com/MineCart7
+- Discord: https://discordapp.com/users/985593016867778590
