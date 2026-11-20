@@ -1,350 +1,527 @@
-import { world, system, ItemStack, Player, Entity } from '@minecraft/server';
-
 // About the project
+/**
+ * QIDB - Quick Item Database V4
+ * Made by MineCart7           https://github.com/MineCart7/QUICK-ITEM-DATABASE
+ * Contact me on Discord:      https://discordapp.com/users/985593016867778590
+ * Discord Discussion:         https://discord.com/channels/523663022053392405/1252014916496527380
+ */
 
-// QIDB - QUICK ITEM DATABASE
-// GitHub:          https://github.com/Carchi777/QUICK-ITEM-DATABASE
-// Discord:         https://discord.com/channels/523663022053392405/1252014916496527380
+import { world, system, ItemStack, EntityComponentTypes, StructureSaveMode } from '@minecraft/server';
 
-// Made by Carchi77
-// My Github:       https://github.com/Carchi777
-// My Discord:      https://discordapp.com/users/985593016867778590
+/**
+ * Value that can be saved in a key.
+ * @typedef {ItemStack | ItemStack[] | undefined} QIDBValue
+ */
 
+/**
+ * Developer debug logs shown in the console (`true` = shown).
+ * @typedef {Object} QIDBLogs
+ * @property {boolean} startUp Database initialized.
+ * @property {boolean} save    Background saving: start, progress and end.
+ * @property {boolean} load    Storage entities loaded from a structure.
+ * @property {boolean} set     `set()` calls.
+ * @property {boolean} get     `get()` calls.
+ * @property {boolean} has     `has()` calls.
+ * @property {boolean} delete  `delete()` calls.
+ * @property {boolean} flush   `flush()` calls.
+ * @property {boolean} clear   `clear()` calls.
+ * @property {boolean} values  `values()` calls.
+ * @property {boolean} keys    `keys()` calls.
+ * @property {boolean} packs   QIDB found in other packs. Global: only `QIDB.defaultSettings.logs.packs` is read.
+ */
+
+/**
+ * A pack using QIDB in this world.
+ * @typedef {Object} QIDBPackInfo
+ * @property {string}   id         Random id of the pack, changes every session.
+ * @property {boolean}  local      `true` if it's this pack.
+ * @property {string[]} namespaces Namespaces used by the pack.
+ */
+
+/**
+ * Complete settings of a database, editable at any time through `db.settings`.
+ * @typedef {Object} QIDBSettings
+ * @property {number}   cacheSize Max amount of keys kept in RAM for quick access, the oldest are dropped first. Use `Infinity` to manage the RAM only with `unload()`.
+ * @property {number}   saveTime  Max milliseconds per tick the background saving can use. Higher = faster saving but heavier ticks.
+ * @property {QIDBLogs} logs      Developer debug logs.
+ */
+
+/**
+ * Settings accepted by the constructor: every field is optional and falls back to `QIDB.defaultSettings`.
+ * `logs` can also be a single boolean to turn every log on or off.
+ * @typedef {Object} QIDBOptions
+ * @property {number} [cacheSize]
+ * @property {number} [saveTime]
+ * @property {boolean | Partial<QIDBLogs>} [logs]
+ */
+
+const STORAGE_ENTITY = "qidb:storage";
+const STORAGE_Y = 318;
+const STORAGE_RADIUS = 1;
+const SLOTS = 256;
+const MAX_ITEMS = SLOTS * 4;
+const MAX_KEY_LENGTH = 30;
+const PROGRESS_TICKS = 100;
+const INDEX_PROP = "qidb:i";
+const ARRAY_PROP = "qidb:a";
+const TICKING_AREA_ID = "qidb_storage";
+
+let storageArea;
 
 function date() {
-    const date = new Date(Date.now())
-    const ms = date.getMilliseconds().toString().padStart(3, "0")
-    return `${date.toLocaleString().replace(' AM', `.${ms} AM`).replace(' PM', `.${ms} PM`)}`
+    const now = new Date();
+    const ms = now.getMilliseconds().toString().padStart(3, "0");
+    return now.toLocaleString().replace(/ (AM|PM)/, `.${ms} $1`);
 }
+
+const isValidName = (name) => /^[A-Za-z0-9_-]*$/.test(name);
+
+function isValidValue(value) {
+    if (!Array.isArray(value)) return value == null || value instanceof ItemStack;
+    for (let i = 0; i < value.length; i++) if (value[i] != null && !(value[i] instanceof ItemStack)) return false;
+    return true;
+}
+
+const invCount = (value) => Array.isArray(value) ? Math.max(1, Math.ceil(value.length / SLOTS)) : 1;
+
+const inventoryOf = (entity) => entity.getComponent(EntityComponentTypes.Inventory).container;
+
+const log = (message, color = "§a") => console.log(`${color}QIDB > ${message} §r${date()}`);
+
+const qidbError = (message) => new Error(`§cQIDB > ${message} §r${date()}`);
+
+function loadStorageArea(dimension, location) {
+    const manager = world.tickingAreaManager;
+    storageArea ??= manager.hasTickingArea(TICKING_AREA_ID)
+        ? Promise.resolve()
+        : manager.createTickingArea(TICKING_AREA_ID, { dimension, from: location, to: location });
+    return storageArea;
+}
+
+function toKey(namespace, key) {
+    if (!isValidName(key)) throw qidbError(`Invalid name: <${key}>. accepted char: A-Z a-z 0-9 _ -`);
+    const fullKey = `${namespace}:${key}`;
+    if (fullKey.length > MAX_KEY_LENGTH) throw qidbError(`Out of range: <${fullKey}> has more than ${MAX_KEY_LENGTH} characters`);
+    return fullKey;
+}
+
+const ANNOUNCE_EVENT = "qidb:announce";
+const PACK_ID = Math.random().toString(36).slice(2, 10);
+const localNamespaces = new Set();
+const otherPacks = new Map();
+const conflicts = new Set();
+let announceScheduled = false;
+
+function announce(ask) {
+    system.sendScriptEvent(ANNOUNCE_EVENT, JSON.stringify({ pack: PACK_ID, namespaces: [...localNamespaces], ask }));
+}
+
+function scheduleAnnounce() {
+    if (announceScheduled) return;
+    announceScheduled = true;
+    system.run(() => { announceScheduled = false; announce(true); });
+}
+
+function checkConflicts(pack, namespaces) {
+    for (const namespace of namespaces) {
+        if (!localNamespaces.has(namespace) || conflicts.has(`${pack}:${namespace}`)) continue;
+        conflicts.add(`${pack}:${namespace}`);
+        console.error(`§cQIDB > Namespace conflict: <${namespace}> is used by another pack too, their keys will overwrite each other. §r${date()}`);
+    }
+}
+
+system.afterEvents.scriptEventReceive.subscribe(({ id, message }) => {
+    if (id !== ANNOUNCE_EVENT) return;
+    let data;
+    try { data = JSON.parse(message); } catch { return; }
+    const { pack, namespaces, ask } = data;
+    if (pack === PACK_ID || !Array.isArray(namespaces)) return;
+
+    if (String(otherPacks.get(pack)) !== String(namespaces)) {
+        otherPacks.set(pack, namespaces);
+        QIDB.defaultSettings.logs.packs && log(`Found QIDB in another pack (${pack}), namespaces: ${namespaces.join(", ") || "-"}`, "§b");
+    }
+    checkConflicts(pack, namespaces);
+    if (ask) announce(false);
+}, { namespaces: ["qidb"] });
+
+/**
+ * Quick Item Database.
+ *
+ * `T` is the type of the values, declare it to skip type checks on `get()`:
+ * ```js
+ * // @type {QIDB<ItemStack>}
+ * const swords = new QIDB("swords");
+ * swords.get("excalibur").amount;
+ * ```
+ * @template {QIDBValue} [T=QIDBValue]
+ */
 export class QIDB {
     /**
-     * @param {string} namespace The unique namespace for the database keys.
-     * @param {number} cacheSize Quick the max amount of keys to keep quickly accessible. A small size can couse lag on frequent iterated usage, a large number can cause high hardware RAM usage.
-     * @param {number} saveRate the background saves per tick, (high performance impact) saveRate1 is 20 keys per second
+     * Defaults used for every setting not passed to the constructor.
+     * Edit it before creating a database to change the defaults of all of them.
+     * @type {QIDBSettings}
      */
-    constructor(namespace = "", cacheSize = 50, saveRate = 1) {
-        system.run(() => {
-            const self = this
-            this.#settings = {
-                namespace: namespace
-            };
-            this.#queuedKeys = []
-            this.#queuedValues = []
-            this.#quickAccess = new Map()
-            this.#validNamespace = /^[A-Za-z0-9_]*$/.test(this.#settings.namespace)
-            this.#dimension = world.getDimension("overworld");
-            this.logs
-            function startLog() {
-                console.log(
-                    `§qQIDB > is initialized successfully.§r namespace: ${self.#settings.namespace} §r${date()} `
-                );
-
-                if (saveRate > 1) {
-                    console.warn(
-                        `§c§lWARNING! \n§r§cQIDB > using a saveRate bigger than 1 can cause slower game ticks and extreme lag while saving 1024 size keys. at <${self.#settings.namespace}> §r${date()} `
-                    );
-                    world.getPlayers().forEach(player => {
-                        if (player.isOp) {
-                            player.sendMessage(
-                                `§c§lWARNING! \n§r§cQIDB > using a saveRate bigger than 1 can cause slower game ticks and extreme lag while saving 1024 size keys. at <${self.#settings.namespace}> §r${date()} `
-                            )
-                        }
-                    })
-                }
-
-            }
-            const VALID_NAMESPACE_ERROR = new Error(`§cQIDB > ${namespace} isn't a valid namespace. accepted char: A-Z a-z 0-9 _ §r${date()}`)
-            let sl = world.scoreboard.getObjective('qidb')
-            this.#sL;
-            const player = world.getPlayers()[0]
-            if (!this.#validNamespace) throw VALID_NAMESPACE_ERROR;
-            if (player)
-                if (!sl || sl?.hasParticipant('x') === false) {
-                    if (!sl) sl = world.scoreboard.addObjective('qidb');
-                    sl.setScore('x', player.location.x)
-                    sl.setScore('z', player.location.z)
-                    this.#sL = { x: sl.getScore('x'), y: 318, z: sl.getScore('z') }
-                    this.#dimension.runCommand(`/tickingarea add ${this.#sL.x} 319 ${this.#sL.z} ${this.#sL.x} 318 ${this.#sL.z} storagearea`);
-                    startLog()
-                } else {
-                    this.#sL = { x: sl.getScore('x'), y: 318, z: sl.getScore('z') }
-                    startLog()
-                }
-            world.afterEvents.playerSpawn.subscribe(({ player, initialSpawn }) => {
-                if (!this.#validNamespace) throw VALID_NAMESPACE_ERROR;
-                if (!initialSpawn) return;
-                if (!sl || sl?.hasParticipant('x') === false) {
-                    if (!sl) sl = world.scoreboard.addObjective('qidb');
-                    sl.setScore('x', player.location.x)
-                    sl.setScore('z', player.location.z)
-                    this.#sL = { x: sl.getScore('x'), y: 318, z: sl.getScore('z') }
-                    this.#dimension.runCommand(`/tickingarea add ${this.#sL.x} 319 ${this.#sL.z} ${this.#sL.x} 318 ${this.#sL.z} storagearea`);
-                    startLog()
-                } else {
-                    this.#sL = { x: sl.getScore('x'), y: 318, z: sl.getScore('z') }
-                    startLog()
-                }
-            })
-            let show = true
-            let runId
-            let lastam
-            system.runInterval(() => {
-                const diff = self.#quickAccess.size - cacheSize;
-                if (diff > 0) {
-                    for (let i = 0; i < diff; i++) {
-                        self.#quickAccess.delete(self.#quickAccess.keys().next()?.value);
-                    }
-                }
-                if (self.#queuedKeys.length) {
-
-                    if (!runId) {
-
-                        log()
-                        runId = system.runInterval(() => {
-                            log()
-                        }, 120)
-                    }
-                    show = false
-                    const k = Math.min(saveRate, this.#queuedKeys.length)
-                    for (let i = 0; i < k; i++) {
-                        this.#romSave(this.#queuedKeys[0], this.#queuedValues[0]);
-                        this.#queuedKeys.shift();
-                        this.#queuedValues.shift()
-                    }
-                } else if (runId) {
-                    system.clearRun(runId)
-                    runId = undefined
-                    show == false && this.logs.save == true && console.log(`§aQIDB >Saved, You can now close the world safely. §r${date()}`)
-                    show = true
-                    return
-                } else return
-            }, 1)
-            function log() {
-                const abc = (-(self.#queuedKeys.length - lastam) / 6).toFixed(0) || '//'
-                self.logs.save == true && console.log(`§eQIDB > Saving, Dont close the world.\n§r[Stats]-§eRemaining: ${self.#queuedKeys.length} keys | speed: ${abc} keys/s §r${date()}`)
-                lastam = self.#queuedKeys.length
-            }
-            system.beforeEvents.shutdown.subscribe(() => {
-                if (this.#queuedKeys.length) {
-                    console.error(
-                        `\n\n\n\n§c§lQIDB > Fatal Error >§r§c World closed too early, items not saved correctly.  \n\n` +
-                        `Namespace: ${this.#settings.namespace}\n` +
-                        `Lost Keys amount: ${this.#queuedKeys.length} §r${date()}\n\n\n\n`
-                    )
-                }
-            })
-        })
-    }
-    logs = {
-        startUp: true,
-        save: true,
-        load: true,
-        set: true,
-        get: true,
-        has: true,
-        delete: true,
-        clear: true,
-        values: true,
-        keys: true,
+    static defaultSettings = {
+        cacheSize: 50,
+        saveTime: 10,
+        logs: {
+            startUp: true,
+            save: true,
+            load: true,
+            set: true,
+            get: true,
+            has: true,
+            delete: true,
+            flush: true,
+            clear: true,
+            values: true,
+            keys: true,
+            packs: true,
+        },
     };
-    #validNamespace;
-    #queuedKeys;
-    #settings;
-    #quickAccess;
-    #queuedValues;
+
+    /**
+     * Current settings, can be edited at any time. e.g. `db.settings.logs.get = false`
+     * @type {QIDBSettings}
+     */
+    settings;
+
+    #namespace;
     #dimension;
-    #sL;
-    #load(key, length) {
-        if (key.length > 30) throw new Error(`§cQIDB > Out of range: <${key}> has more than 30 characters §r${date()}`)
-        let canStr = false;
-        try {
-            world.structureManager.place(key, this.#dimension, this.#sL, { includeEntities: true });
-            canStr = true;
+    #storage;
+    #quickAccess = new Map();
+    #queue = new Map();
+    #saveRun;
 
-        } catch {
-            console.log(length)
-            for (let i = 0; i < length; i++)
-                this.#dimension.spawnEntity("qidb:storage", this.#sL);
-        }
-        /**@type {Entity[]} */
-        const entities = this.#dimension.getEntities({ location: this.#sL, type: "qidb:storage" });
-        /**@type {Container[]} */
-        if (entities.length < length) {
-            for (let i = entities.length; i < length; i++)
-                entities.push(this.#dimension.spawnEntity("qidb:storage", this.#sL))
-        }
-        if (entities.length > length) {
-            console.log('entities.length > length: ', entities.length, '>', length, entities.length > length)
-            for (let i = entities.length; i > length; i--) {
-                console.log('removed', i)
-                entities[i - 1].remove()
-                entities.pop()
-            }
-        }
-        const invs = []
-        entities.forEach(entity => {
-            invs.push(entity.getComponent("inventory").container)
-        })
-
-        this.logs.load == true && console.log(`§aQIDB > Loaded ${entities.length} entities <${key}> §r${date()}`)
-        return { canStr, invs };
-    }
-    async #save(key, canStr) {
-        if (canStr) world.structureManager.delete(key);
-        world.structureManager.createFromWorld(key, this.#dimension, this.#sL, this.#sL, { saveMode: "World", includeEntities: true });
-        const entities = this.#dimension.getEntities({ location: this.#sL, type: "qidb:storage" });
-        entities.forEach(e => e.remove());
-    }
-
-    async #queueSaving(key, value) {
-        this.#queuedKeys.push(key)
-        this.#queuedValues.push(value)
-    }
-    async #romSave(key, value) {
-        const { canStr, invs } = this.#load(key, (Math.floor((value?.length - 1) / 256) + 1) || 1);
-        invs.forEach((inv, index) => {
-            if (!value) for (let i = 256 * index; i < 256 * index + 256; i++) inv.setItem(i - 256 * index, undefined), world.setDynamicProperty(key, null);
-            if (Array.isArray(value)) {
-                try { for (let i = 256 * index; i < 256 * index + 256; i++) inv.setItem(i - 256 * index, value[i] || undefined) } catch { throw new Error(`§cQIDB > Invalid value type. supported: ItemStack | ItemStack[] | undefined §r${date()}`) }
-                world.setDynamicProperty(key, (Math.floor((value?.length - 1) / 256) + 1) || 1)
-            } else {
-                try { inv.setItem(0, value), world.setDynamicProperty(key, false) } catch { throw new Error(`§cQIDB > Invalid value type. supported: ItemStack | ItemStack[] | undefined §r${date()}`) }
-            }
-        })
-        this.#save(key, canStr);
+    /**
+     * Every pack using QIDB in this world with its namespaces, this pack included (`local: true`). Updated live.
+     * @type {QIDBPackInfo[]}
+     */
+    static get packs() {
+        const packs = [{ id: PACK_ID, local: true, namespaces: [...localNamespaces] }];
+        otherPacks.forEach((namespaces, id) => packs.push({ id, local: false, namespaces }));
+        return packs;
     }
 
     /**
-     * Sets a value as a key in the item database.
+     * @param {string} namespace The unique namespace for the database keys. accepted char: A-Z a-z 0-9 _ -
+     * @param {QIDBOptions} [settings] Optional settings, see `QIDBSettings`.
+     */
+    constructor(namespace = "", settings = {}) {
+        if (!isValidName(namespace)) throw qidbError(`<${namespace}> isn't a valid namespace. accepted char: A-Z a-z 0-9 _ -`);
+        if (localNamespaces.has(namespace)) throw qidbError(`<${namespace}> is already used by another QIDB of this pack.`);
+        this.#namespace = namespace;
+
+        localNamespaces.add(namespace);
+        otherPacks.forEach((namespaces, pack) => checkConflicts(pack, namespaces));
+        scheduleAnnounce();
+
+        const defaults = QIDB.defaultSettings;
+        const logs = typeof settings.logs === "boolean"
+            ? Object.fromEntries(Object.keys(defaults.logs).map(name => [name, settings.logs]))
+            : { ...defaults.logs, ...settings.logs };
+        this.settings = { ...defaults, ...settings, logs };
+
+        system.beforeEvents.shutdown.subscribe(() => {
+            if (!this.#queue.size) return;
+            console.error(
+                `\n\n\n\n§c§lQIDB > Fatal Error >§r§c World closed too early, items not saved correctly.\n\n` +
+                `Namespace: ${this.#namespace}\n` +
+                `Lost Keys amount: ${this.#queue.size} §r${date()}\n\n\n\n`
+            );
+        });
+
+        system.run(() => {
+            this.#dimension = world.getDimension("overworld");
+
+            const setup = (player) => {
+                const objective = world.scoreboard.getObjective("qidb") ?? world.scoreboard.addObjective("qidb");
+                if (!objective.hasParticipant("x")) {
+                    if (!player) return false;
+                    objective.setScore("x", Math.floor(player.location.x));
+                    objective.setScore("z", Math.floor(player.location.z));
+                }
+                const location = { x: objective.getScore("x"), y: STORAGE_Y, z: objective.getScore("z") };
+                loadStorageArea(this.#dimension, location)
+                    .then(() => {
+                        this.#storage = location;
+                        this.settings.logs.startUp && log(`is initialized successfully.§r namespace: ${this.#namespace}`, "§q");
+                    })
+                    .catch(error => console.error(`§cQIDB > Can't load the storage ticking area: ${error} §r${date()}`));
+                return true;
+            };
+
+            if (setup(world.getPlayers()[0])) return;
+            const onSpawn = world.afterEvents.playerSpawn.subscribe(({ player, initialSpawn }) => {
+                if (initialSpawn && setup(player)) world.afterEvents.playerSpawn.unsubscribe(onSpawn);
+            });
+        });
+    }
+
+    #load(key, length) {
+        const reading = length === undefined;
+        if (reading) world.structureManager.place(key, this.#dimension, this.#storage, { includeEntities: true });
+        const entities = this.#dimension.getEntities({ location: this.#storage, maxDistance: STORAGE_RADIUS, type: STORAGE_ENTITY });
+        if (reading) entities.sort((a, b) => (a.getDynamicProperty(INDEX_PROP) ?? 0) - (b.getDynamicProperty(INDEX_PROP) ?? 0));
+        else {
+            while (entities.length < length) entities.push(this.#dimension.spawnEntity(STORAGE_ENTITY, this.#storage));
+            while (entities.length > length) entities.pop().remove();
+        }
+        this.settings.logs.load && log(`Loaded ${entities.length} entities <${key}>`);
+        return entities;
+    }
+
+    #save(key, entities) {
+        try {
+            world.structureManager.delete(key);
+            world.structureManager.createFromWorld(key, this.#dimension, this.#storage, this.#storage, { saveMode: StructureSaveMode.World, includeEntities: true });
+        } finally {
+            entities.forEach(entity => entity.remove());
+        }
+    }
+
+    #romSave(key, value) {
+        const isArray = Array.isArray(value);
+        const entities = this.#load(key, invCount(value));
+        try {
+            for (let e = 0; e < entities.length; e++) {
+                const entity = entities[e];
+                entity.setDynamicProperty(INDEX_PROP, e);
+                entity.setDynamicProperty(ARRAY_PROP, isArray);
+                const inv = inventoryOf(entity);
+                inv.clearAll();
+                if (!isArray) {
+                    if (value) inv.setItem(0, value);
+                    continue;
+                }
+                const offset = e * SLOTS;
+                const end = Math.min(value.length, offset + SLOTS);
+                for (let i = offset; i < end; i++) if (value[i]) inv.setItem(i - offset, value[i]);
+            }
+        } catch (error) {
+            entities.forEach(entity => entity.remove());
+            throw error;
+        }
+        this.#save(key, entities);
+    }
+
+    #queueSaving(key, value) {
+        this.#queue.delete(key);
+        this.#queue.set(key, value);
+        this.#saveHandler();
+    }
+
+    #cache(key, value) {
+        this.#quickAccess.delete(key);
+        this.#quickAccess.set(key, value);
+        while (this.#quickAccess.size > this.settings.cacheSize) this.#quickAccess.delete(this.#quickAccess.keys().next().value);
+    }
+
+    #saveHandler() {
+        if (this.#saveRun !== undefined) return;
+
+        const self = this;
+        const start = Date.now();
+        let saved = 0, lastSaved = 0, ticks = 0;
+        let jobId;
+
+        function* saveBatch() {
+            try {
+                const end = Date.now() + self.settings.saveTime;
+                for (const key of self.#queue.keys()) {
+                    if (Date.now() >= end) break;
+                    const value = self.#queue.get(key);
+                    self.#queue.delete(key);
+                    try { self.#romSave(key, value); saved++; }
+                    catch (error) { console.error(`§cQIDB > Failed to save <${key}>: ${error} §r${date()}`); }
+                    yield;
+                }
+            } finally {
+                jobId = undefined;
+            }
+        }
+
+        this.settings.logs.save && log(`Saving ${this.#queue.size} keys, don't close the world.`, "§e");
+
+        this.#saveRun = system.runInterval(() => {
+            ticks++;
+            if (!this.#queue.size && jobId === undefined) {
+                system.clearRun(this.#saveRun);
+                this.#saveRun = undefined;
+                this.settings.logs.save && log(`Saved ${saved} keys in ${Date.now() - start}ms, you can now close the world safely.`);
+                return;
+            }
+            if (ticks % PROGRESS_TICKS === 0) {
+                const speed = ((saved - lastSaved) / (PROGRESS_TICKS / 20)).toFixed(0);
+                this.settings.logs.save && log(`Saving, don't close the world.\n§r[Stats]-§eRemaining: ${this.#queue.size} keys | speed: ${speed} keys/s`, "§e");
+                lastSaved = saved;
+            }
+            if (this.#storage && jobId === undefined && this.#queue.size) jobId = system.runJob(saveBatch());
+        }, 1);
+    }
+
+    /** Amount of keys not saved yet. The world can be closed safely when it's `0`. */
+    get pending() {
+        return this.#queue.size;
+    }
+
+    /**
+     * Sets a value as a key in the item database. It's saved in background, see `flush()` to save it now.
      * @param {string} key The unique identifier of the value.
-     * @param {ItemStack[] | ItemStack} value The `ItemStack[]` or `itemStack` value to set.
-     * @throws Throws if `value` is an array that has more than 512 items.
+     * @param {T} value The `ItemStack[]` or `ItemStack` value to set.
+     * @throws Throws if `value` isn't a valid value or is an array that has more than 1024 items.
      */
     set(key, value) {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
-        if (!/^[A-Za-z0-9_]*$/.test(key)) throw new Error(`§cQIDB > Invalid name: <${key}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
         const time = Date.now();
-        key = this.#settings.namespace + ":" + key;
-        if (Array.isArray(value)) {
-            if (value.length > 1024) throw new Error(`§cQIDB > Out of range: <${key}> has more than 1024 ItemStacks §r${date()}`)
-            world.setDynamicProperty(key, (Math.floor((value?.length - 1) / 256) + 1) || 1)
-        } else {
-            world.setDynamicProperty(key, false)
-        }
-        this.#quickAccess.set(key, value)
-        if (this.#queuedKeys.includes(key)) {
-            const i = this.#queuedKeys.indexOf(key)
-            this.#queuedValues.splice(i, 1)
-            this.#queuedKeys.splice(i, 1)
-        }
-        this.#queueSaving(key, value)
-        this.logs.set == true && console.log(`§aQIDB > Set key <${key}> succesfully. ${Date.now() - time}ms §r${date()}`)
+        key = toKey(this.#namespace, key);
+        if (!isValidValue(value)) throw qidbError(`Invalid value type. supported: ItemStack | ItemStack[] | undefined`);
+        if (Array.isArray(value) && value.length > MAX_ITEMS) throw qidbError(`Out of range: <${key}> has more than ${MAX_ITEMS} ItemStacks`);
 
+        value ??= undefined;
+        this.#cache(key, value);
+        this.#queueSaving(key, value);
+        this.settings.logs.set && log(`Set key <${key}> successfully. ${Date.now() - time}ms`);
     }
+
     /**
      * Gets the value of a key from the item database.
+     * The value is returned by reference: edit a copy (`item.clone()`) if you don't want to change the database,
+     * or call `set()` again with the same value to save your edits.
      * @param {string} key The identifier of the value.
-     * @returns {ItemStack | ItemStack[]} The `ItemStack` | `ItemStack[]` saved as `key`
+     * @returns {T} The `ItemStack` | `ItemStack[]` saved as `key`
      * @throws Throws if the key doesn't exist.
      */
     get(key) {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
-        if (!/^[A-Za-z0-9_]*$/.test(key)) throw new Error(`§cQIDB > Invalid name: <${key}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
         const time = Date.now();
-        key = this.#settings.namespace + ":" + key;
-        if (this.#quickAccess.has(key)) {
-            this.logs.get == true && console.log(`§aQIDB > Got key <${key}> succesfully. ${Date.now() - time}ms §r${date()}`)
-            return this.#quickAccess.get(key);
+        key = toKey(this.#namespace, key);
+
+        let value;
+        if (this.#quickAccess.has(key)) value = this.#quickAccess.get(key);
+        else {
+            if (this.#queue.has(key)) value = this.#queue.get(key);
+            else {
+                if (!world.structureManager.get(key)) throw qidbError(`The key <${key}> doesn't exist.`);
+                if (!this.#storage) throw qidbError(`Storage not initialized yet, wait for a player to join.`);
+                const entities = this.#load(key);
+                try {
+                    const isArray = entities[0]?.getDynamicProperty(ARRAY_PROP) ?? !!world.getDynamicProperty(key);
+                    if (!isArray) value = entities[0] && inventoryOf(entities[0]).getItem(0);
+                    else {
+                        const items = new Array(entities.length * SLOTS);
+                        let length = 0;
+                        for (let e = 0; e < entities.length; e++) {
+                            const inv = inventoryOf(entities[e]);
+                            const offset = e * SLOTS;
+                            for (let slot = 0; slot < SLOTS; slot++) {
+                                const item = inv.getItem(slot);
+                                items[offset + slot] = item;
+                                if (item) length = offset + slot + 1;
+                            }
+                        }
+                        items.length = length;
+                        value = items;
+                    }
+                } finally {
+                    entities.forEach(entity => entity.remove());
+                }
+            }
+            this.#cache(key, value);
         }
-        const structure = world.structureManager.get(key)
-        if (!structure) throw new Error(`§cQIDB > The key < ${key} > doesn't exist.`);
-        const { canStr, invs } = this.#load(key);
-        const items = [];
-        invs.forEach((inv, index) => {
-            for (let i = 256 * index; i < 256 * index + 256; i++) items.push(inv.getItem(i - 256 * index));
-            for (let i = 256 * index + 255; i >= 0; i--) if (!items[i]) items.pop(); else break;
-        })
-        this.#save(key, canStr);
 
-        this.logs.get == true && console.log(`§aQIDB > Got items from <${key}> succesfully. ${Date.now() - time}ms §r${date()}`)
-
-        if (world.getDynamicProperty(key)) { this.#quickAccess.set(key, items); return items }
-        else { this.#quickAccess.set(key, items[0]); return items[0]; }
+        this.settings.logs.get && log(`Got key <${key}> successfully. ${Date.now() - time}ms`);
+        return value;
     }
+
     /**
      * Checks if a key exists in the item database.
      * @param {string} key The identifier of the value.
-     * @returns {boolean}`true` if the key exists, `false` if the key doesn't exist.
+     * @returns {boolean} `true` if the key exists, `false` if the key doesn't exist.
      */
     has(key) {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
-        if (!/^[A-Za-z0-9_]*$/.test(key)) throw new Error(`§cQIDB > Invalid name: <${key}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
         const time = Date.now();
-        key = this.#settings.namespace + ":" + key;
-        const exist = this.#quickAccess.has(key) || world.structureManager.get(key)
-        this.logs.has == true && console.log(`§aQIDB > Found key <${key}> succesfully. ${Date.now() - time}ms §r${date()}`)
-
-
-        if (exist) return true; else return false
+        key = toKey(this.#namespace, key);
+        const exist = this.#quickAccess.has(key) || this.#queue.has(key) || !!world.structureManager.get(key);
+        this.settings.logs.has && log(`${exist ? "Found" : "Didn't find"} key <${key}>. ${Date.now() - time}ms`);
+        return exist;
     }
+
     /**
      * Deletes a key from the item database.
      * @param {string} key The identifier of the value.
-                    * @throws Throws if the key doesn't exist.
-                    */
+     * @throws Throws if the key doesn't exist.
+     */
     delete(key) {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
-        if (!/^[A-Za-z0-9_]*$/.test(key)) throw new Error(`§cQIDB > Invalid name: <${key}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
         const time = Date.now();
-        key = this.#settings.namespace + ":" + key;
-        if (this.#quickAccess.has(key)) this.#quickAccess.delete(key)
-        const structure = world.structureManager.get(key)
-        if (structure) world.structureManager.delete(key), world.setDynamicProperty(key, null);
-        else throw new Error(`§cQIDB > The key <${key}> doesn't exist. §r${date()}`);
-        this.logs.delete == true && console.log(`§aQIDB > Deleted key <${key}> succesfully. ${Date.now() - time}ms §r${date()}`)
+        key = toKey(this.#namespace, key);
+        this.#quickAccess.delete(key);
+        const wasQueued = this.#queue.delete(key);
+        if (!world.structureManager.delete(key) && !wasQueued) throw qidbError(`The key <${key}> doesn't exist.`);
+        world.setDynamicProperty(key, undefined);
+        this.settings.logs.delete && log(`Deleted key <${key}> successfully. ${Date.now() - time}ms`);
     }
+
+    /**
+     * Removes keys from RAM (quick access) without touching the saved data.
+     * Unsaved keys are still saved normally.
+     * @param {string} [key] The key to unload, if omitted unloads every key.
+     */
+    unload(key) {
+        if (key === undefined) this.#quickAccess.clear();
+        else this.#quickAccess.delete(toKey(this.#namespace, key));
+    }
+
+    /**
+     * Saves now, without waiting for the background saving.
+     * @param {string} [key] The key to save, if omitted saves every pending key.
+     * @throws Throws if the storage isn't initialized yet (no player joined the world for the first time).
+     */
+    flush(key) {
+        if (!this.#storage) throw qidbError(`Storage not initialized yet, wait for a player to join.`);
+        const time = Date.now();
+        let flushed = 0;
+        for (const k of key === undefined ? this.#queue.keys() : [toKey(this.#namespace, key)]) {
+            if (!this.#queue.has(k)) continue;
+            const value = this.#queue.get(k);
+            this.#queue.delete(k);
+            this.#romSave(k, value);
+            flushed++;
+        }
+        this.settings.logs.flush && log(`Flushed ${flushed} keys. ${Date.now() - time}ms`);
+    }
+
     /**
      * Gets all the keys of your namespace from item database.
      * @return {string[]} All the keys as an array of strings.
-                        */
+     */
     keys() {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
-        const allIds = world.getDynamicPropertyIds()
-        const ids = []
-        allIds.filter(id => id.startsWith(this.#settings.namespace + ":")).forEach(id => ids.push(id.replace(this.#settings.namespace + ":", "")))
-        this.logs.keys == true && console.log(`§aQIDB > Got the list of all the ${ids.length} keys. §r${date()}`)
-
-        return ids;
+        const prefix = this.#namespace + ":";
+        const keys = [];
+        for (const id of world.structureManager.getWorldStructureIds())
+            if (id.startsWith(prefix) && !this.#queue.has(id)) keys.push(id.slice(prefix.length));
+        for (const id of this.#queue.keys()) keys.push(id.slice(prefix.length));
+        this.settings.logs.keys && log(`Got the list of all the ${keys.length} keys.`);
+        return keys;
     }
-    /**
-     * Gets all the keys of your namespace from item database (takes some time if values aren't alredy loaded in quickAccess).
-     * @return {ItemStack[][]} All the values as an array of ItemStack or ItemStack[].
-                            */
-    values() {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
-        const time = Date.now();
-        const allIds = world.getDynamicPropertyIds()
-        const values = []
-        const filtered = allIds.filter(id => id.startsWith(this.#settings.namespace + ":")).map(id => id.replace(this.#settings.namespace + ":", ""))
-        for (const key of filtered) {
-            values.push(this.get(key));
-        }
-        this.logs.values == true && console.log(`§aQIDB > Got the list of all the ${values.length} values. ${Date.now() - time}ms §r${date()}`)
 
+    /**
+     * Gets all the values of your namespace from item database (takes some time if values aren't already loaded in quickAccess).
+     * @return {T[]} All the values.
+     */
+    values() {
+        const time = Date.now();
+        const values = this.keys().map(key => this.get(key));
+        this.settings.logs.values && log(`Got the list of all the ${values.length} values. ${Date.now() - time}ms`);
         return values;
     }
+
     /**
      * Clears all, CAN NOT REWIND.
      */
     clear() {
-        if (!this.#validNamespace) throw new Error(`§cQIDB > Invalid name: <${this.#settings.namespace}>. accepted char: A-Z a-z 0-9 _ §r${date()}`);
         const time = Date.now();
-        const allIds = world.getDynamicPropertyIds()
-        const filtered = allIds.filter(id => id.startsWith(this.#settings.namespace + ":")).map(id => id.replace(this.#settings.namespace + ":", ""))
-        for (const key of filtered) {
-            this.delete(key)
-        }
-        this.logs.clear == true && console.log(`§aQIDB > Cleared, deleted ${filtered.length} values. ${Date.now() - time}ms §r${date()}`)
-
+        const keys = this.keys();
+        keys.forEach(key => this.delete(key));
+        this.settings.logs.clear && log(`Cleared, deleted ${keys.length} values. ${Date.now() - time}ms`);
     }
 }
