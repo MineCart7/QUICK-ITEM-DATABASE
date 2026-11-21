@@ -4,15 +4,15 @@
 I made this to fix the **main issue** of Minecraft's Script API: **you can't save ItemStacks in a dynamic property**, and if you try to stringify their properties you still lose some of them that are unreachable with scripts. **This database fixes this problem using structures that save perfect item clones, making it easy, reliable and fast.**
 
 # Projects that alredy use QIDB
-[Simple Kits](https://www.curseforge.com/minecraft-bedrock/addons/simple-kits) - By **Legend077**
 
-[GearKits](https://www.curseforge.com/minecraft-bedrock/addons/gearkits) - By **lildanlid**
-
-[Infinite Ender Chest](https://www.curseforge.com/minecraft-bedrock/addons/infinite-ender-chest) - By **iskesa**
-
-[Crossblades+](https://www.curseforge.com/minecraft-bedrock/addons/crossbladesplus) - By **areedelahi**
-
-[DonutSMP Shop & Sell System](https://www.curseforge.com/minecraft-bedrock/addons/shop-sell-donutsmp-shop-sell-system) - By **SomMondal123**
+| Addon | Author | Downloads |
+| :--- | :--- | :--- |
+| [Revive Me!](https://www.curseforge.com/minecraft-bedrock/addons/revive-me) | **Minecart7 (Me)** | 190K |
+| [Simple Kits](https://www.curseforge.com/minecraft-bedrock/addons/simple-kits) | **Legend077** | 5.2K |
+| [GearKits](https://www.curseforge.com/minecraft-bedrock/addons/gearkits) | **lildanlid** | 1.9K |
+| [Infinite Ender Chest](https://www.curseforge.com/minecraft-bedrock/addons/infinite-ender-chest) | **iskesa** | 18.9K |
+| [Crossblades+](https://www.curseforge.com/minecraft-bedrock/addons/crossbladesplus) | **areedelahi** | 14.3K |
+| [DonutSMP Shop & Sell System](https://www.curseforge.com/minecraft-bedrock/addons/shop-sell-donutsmp-shop-sell-system) | **SomMondal123** | 1.6K |
 
 # How does it work?
 
