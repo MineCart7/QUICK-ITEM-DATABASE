@@ -8,10 +8,10 @@ I made this to fix the **main issue** of Minecraft's Script API: **you can't sav
 | Addon | Author | Downloads |
 | :--- | :--- | :--- |
 | [Revive Me!](https://www.curseforge.com/minecraft-bedrock/addons/revive-me) | **Minecart7 (Me)** | 190K |
-| [Simple Kits](https://www.curseforge.com/minecraft-bedrock/addons/simple-kits) | **Legend077** | 5.2K |
-| [GearKits](https://www.curseforge.com/minecraft-bedrock/addons/gearkits) | **lildanlid** | 1.9K |
 | [Infinite Ender Chest](https://www.curseforge.com/minecraft-bedrock/addons/infinite-ender-chest) | **iskesa** | 18.9K |
 | [Crossblades+](https://www.curseforge.com/minecraft-bedrock/addons/crossbladesplus) | **areedelahi** | 14.3K |
+| [Simple Kits](https://www.curseforge.com/minecraft-bedrock/addons/simple-kits) | **Legend077** | 5.2K |
+| [GearKits](https://www.curseforge.com/minecraft-bedrock/addons/gearkits) | **lildanlid** | 1.9K |
 | [DonutSMP Shop & Sell System](https://www.curseforge.com/minecraft-bedrock/addons/shop-sell-donutsmp-shop-sell-system) | **SomMondal123** | 1.6K |
 
 # How does it work?
